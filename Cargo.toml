@@ -1,0 +1,9 @@
+[package]
+name = "pxm"
+version = "0.1.0"
+authors = ["Zhe Chen <chenzhekl@gmail.com>"]
+edition = "2018"
+description = "A simple loader and saver for PxM (PFM, PBM, etc) formats."
+license = "Apache-2.0"
+
+[dependencies]
