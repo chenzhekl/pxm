@@ -1,6 +1,6 @@
 # PxM
 
-Simple loader and saver for PxM (PFM, PBM, etc) formats. Currently only `PFM` format is supported.
+A simple loader and saver for PxM (PFM, PBM, etc) formats. Currently only `PFM` format is supported.
 
 _This project is considered unstable and expected major API changes._
 

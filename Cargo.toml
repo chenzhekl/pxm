@@ -7,3 +7,4 @@ description = "A simple loader and saver for PxM (PFM, PBM, etc) formats."
 license = "Apache-2.0"
 
 [dependencies]
+byteorder = "1"
