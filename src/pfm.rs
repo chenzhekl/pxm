@@ -1,14 +1,12 @@
 use crate::common::Endian;
 use byteorder::{BigEndian, LittleEndian, ReadBytesExt, WriteBytesExt};
-use std::fs::File;
 use std::io::prelude::*;
 use std::io::Cursor;
-use std::path::Path;
 use std::str;
 
 /// PFM struct contains all the information about a PFM file.
 /// Note that
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct PFM {
     /// Width of image.
     pub width: usize,
@@ -26,15 +24,10 @@ pub struct PFM {
 }
 
 impl PFM {
-    /// Create PFM struct from disk file.
-    pub fn from_file(path: impl AsRef<Path>) -> Result<PFM, &'static str> {
-        let mut file = match File::open(path) {
-            Ok(file) => file,
-            Err(_) => return Err("Unable to open file"),
-        };
-
+    /// Create `PFM` struct from objects implementing `Read` trait.
+    pub fn read_from(reader: &mut impl Read) -> Result<PFM, &'static str> {
         let mut buffer = Vec::new();
-        match file.read_to_end(&mut buffer) {
+        match reader.read_to_end(&mut buffer) {
             Ok(bytes) => {
                 if bytes == 0 {
                     return Err("Empty file");
@@ -43,7 +36,19 @@ impl PFM {
             Err(_) => return Err("Unable to read from file"),
         };
 
-        parse(&buffer)
+        decode(&buffer)
+    }
+
+    /// Encode and write `PFM` to objects implementing `Write` trait.
+    pub fn write_into(&self, writer: &mut impl Write) -> Result<(), &'static str> {
+        let buffer = encode(&self)?;
+        match writer.write_all(&buffer) {
+            Ok(_) => match writer.flush() {
+                Err(_) => Err("Unable to flush data"),
+                _ => Ok(()),
+            },
+            Err(_) => Err("Unable to write into the writer"),
+        }
     }
 }
 
@@ -117,7 +122,51 @@ impl PFMBuilder {
     }
 }
 
-fn parse(buffer: &[u8]) -> Result<PFM, &'static str> {
+fn encode(pfm: &PFM) -> Result<Vec<u8>, &'static str> {
+    if pfm.width == 0 || pfm.height == 0 {
+        return Err("Invalid width or height");
+    }
+
+    if pfm.scale_factor == 0.0 {
+        return Err("Invalid scaling factor");
+    }
+
+    let scale = match pfm.endian {
+        Endian::Little => -1.0 * pfm.scale_factor,
+        Endian::Big => pfm.scale_factor,
+    };
+    let header = if pfm.color { "PF" } else { "Pf" };
+    let num_channels = if pfm.color { 3 } else { 1 };
+
+    if pfm.width * pfm.height * num_channels != pfm.data.len() {
+        return Err("The length of image data is not equal to width * height * channels specified in the header");
+    }
+
+    let mut buffer = Vec::new();
+
+    buffer.extend_from_slice(header.as_bytes());
+    buffer.push(b'\n');
+
+    buffer.extend_from_slice(format!("{} {}\n", pfm.width, pfm.height).as_bytes());
+
+    buffer.extend_from_slice(format!("{}\n", scale).as_bytes());
+
+    buffer.reserve(pfm.width * pfm.height * num_channels * 4);
+
+    for row in (0..pfm.height).rev() {
+        for col in 0..(pfm.width * num_channels) {
+            let cursor = row * pfm.width * num_channels + col;
+            match pfm.endian {
+                Endian::Little => buffer.write_f32::<LittleEndian>(pfm.data[cursor]).unwrap(),
+                Endian::Big => buffer.write_f32::<BigEndian>(pfm.data[cursor]).unwrap(),
+            }
+        }
+    }
+
+    Ok(buffer)
+}
+
+fn decode(buffer: &[u8]) -> Result<PFM, &'static str> {
     let (mut builder, buffer) = parse_header(buffer)?;
 
     let endian = builder.0.endian;
@@ -149,7 +198,7 @@ fn parse(buffer: &[u8]) -> Result<PFM, &'static str> {
             break;
         }
         for col in 0..(width * num_channels) {
-            let a = row * width + col;
+            let a = row * width * num_channels + col;
             let b = (height - 1 - row) * width * num_channels + col;
             data.swap(a, b);
         }
@@ -250,25 +299,55 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse() {
-        let buffer = vec![
+    fn test_read_from() {
+        let mut buffer = Cursor::new(vec![
             0x50, 0x46, 0x0A, // PF
-            0x31, 0x20, 0x32, 0x0A, // 1 2
-            0x2D, 0x31, 0x2E, 0x30, 0x30, 0x30, 0x30, 0x30, 0x30, 0x0A, // -1.0
+            0x31, 0x20, 0x33, 0x0A, // 1 2
+            0x2D, 0x31, 0x2E, 0x30, 0x30, 0x30, 0x30, 0x30, 0x30, 0x0A, // -1.000000
             0x00, 0x00, 0x80, 0x3f, 0x00, 0x00, 0x80, 0x3f, 0x00, 0x00, 0x80,
             0x3f, // 1.0 1.0 1.0
             0x00, 0x00, 0x00, 0x3f, 0x00, 0x00, 0x00, 0x3f, 0x00, 0x00, 0x00,
             0x3f, // 0.5 0.5 0.5
-        ];
+            0x00, 0x00, 0x00, 0x3f, 0x00, 0x00, 0x00, 0x3f, 0x00, 0x00, 0x00,
+            0x3f, // 0.5 0.5 0.5
+        ]);
 
-        let pfm = parse(&buffer).unwrap();
+        let pfm = PFM::read_from(&mut buffer).unwrap();
 
         assert_eq!(pfm.color, true);
         assert_eq!(pfm.endian, Endian::Little);
         assert_eq!(pfm.scale_factor, 1.0);
-        assert_eq!(pfm.height, 2);
+        assert_eq!(pfm.height, 3);
         assert_eq!(pfm.width, 1);
-        assert_eq!(pfm.data, vec![0.5, 0.5, 0.5, 1.0, 1.0, 1.0])
+        assert_eq!(pfm.data, vec![0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 1.0, 1.0, 1.0])
+    }
+
+    #[test]
+    fn test_write_into() {
+        let pfm = PFMBuilder::new()
+            .color(true)
+            .scale(-1.0)
+            .size(1, 3)
+            .data(vec![0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 1.0, 1.0, 1.0])
+            .build()
+            .unwrap();
+
+        let mut buffer = Vec::new();
+        let buffer_gt = vec![
+            0x50, 0x46, 0x0A, // PF
+            0x31, 0x20, 0x33, 0x0A, // 1 2
+            0x2D, 0x31, 0x0A, // -1
+            0x00, 0x00, 0x80, 0x3f, 0x00, 0x00, 0x80, 0x3f, 0x00, 0x00, 0x80,
+            0x3f, // 1.0 1.0 1.0
+            0x00, 0x00, 0x00, 0x3f, 0x00, 0x00, 0x00, 0x3f, 0x00, 0x00, 0x00,
+            0x3f, // 0.5 0.5 0.5
+            0x00, 0x00, 0x00, 0x3f, 0x00, 0x00, 0x00, 0x3f, 0x00, 0x00, 0x00,
+            0x3f, // 0.5 0.5 0.5
+        ];
+
+        pfm.write_into(&mut buffer).unwrap();
+
+        assert_eq!(buffer, buffer_gt);
     }
 
     #[test]
