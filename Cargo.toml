@@ -5,6 +5,9 @@ authors = ["Zhe Chen <chenzhekl@gmail.com>"]
 edition = "2018"
 description = "A simple loader and saver for PxM (PFM, PBM, etc) formats."
 license = "Apache-2.0"
+repository = "https://github.com/chenzhekl/pxm"
+documentation = "https://docs.rs/pxm/0.1.0/pxm"
+homepage = "https://github.com/chenzhekl/pxm"
 
 [dependencies]
 byteorder = "1"
